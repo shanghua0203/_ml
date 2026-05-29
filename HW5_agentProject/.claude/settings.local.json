@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(pip install *)",
+      "Read(//home/shanghua/.claude/skills/excalidraw-diagram/references/**)",
+      "Bash(uv run *)",
+      "Bash(python3 -c \"import json; json.load\\(open\\('/home/shanghua/claudeCode/agentProject/agentSecure-flow.excalidraw'\\)\\)\")"
+    ]
+  }
+}
