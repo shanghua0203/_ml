@@ -32,12 +32,12 @@ from model import MyLanguageModel
 
 CHECKPOINT_PATH = "model_checkpoint.pt"  # 模型權重存檔路徑
 BATCH_SIZE = 64                         # 每次訓練搬幾筆資料（DataLoader 推車容量）
-TOTAL_EPOCHS = 150                      # 總共訓練幾輪
-LEARNING_RATE = 0.01                    # 學習率：每次調整參數的幅度
-SEQUENCE_LENGTH = 8                     # 用前面幾個詞預測下一個詞
-TEMPERATURE = 0.8                       # 文字生成溫度：越低越保守，越高越有創意
+TOTAL_EPOCHS = 1500                      # 總共訓練幾輪
+LEARNING_RATE = 0.0001                    # 學習率：每次調整參數的幅度
+SEQUENCE_LENGTH = 10                     # 用前面幾個詞預測下一個詞
+TEMPERATURE = 0.7                       # 文字生成溫度：越低越保守，越高越有創意
 TOP_K = 5                               # Top-k 採樣：只從前 k 個熱門詞中抽樣
-PATIENCE = 20                           # 提早停止機制：容忍幾回合 Loss 沒下降
+PATIENCE = 100                          # 提早停止機制：容忍幾回合 Loss 沒下降
 
 
 # =====================================================================
