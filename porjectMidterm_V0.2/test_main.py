@@ -330,11 +330,11 @@ class TestModelInit:
     def test_default_params(self, vocab):
         model = MyLanguageModel(vocab)
         assert model.embedding.num_embeddings == vocab
-        assert model.embedding.embedding_dim == 64
-        assert model.lstm.input_size == 64
-        assert model.lstm.hidden_size == 64
+        assert model.embedding.embedding_dim == 256
+        assert model.lstm.input_size == 256
+        assert model.lstm.hidden_size == 256
         assert model.lstm.num_layers == 2
-        assert model.fc.in_features == 64
+        assert model.fc.in_features == 256
         assert model.fc.out_features == vocab
 
     def test_custom_params_without_tie(self, vocab):

@@ -24,8 +24,8 @@ class MyLanguageModel(nn.Module):
     - embed_size 現在預設等於 hidden_size（權重共享需要兩者大小一樣）
     """
 
-    def __init__(self, vocab_size, embed_size=64, hidden_size=64, num_layers=2,
-                 dropout=0.2, tie_weights=True):
+    def __init__(self, vocab_size, embed_size=256, hidden_size=256, num_layers=2,
+                 dropout=0.1, tie_weights=True):
         """
         初始化模型的三層結構。
 
