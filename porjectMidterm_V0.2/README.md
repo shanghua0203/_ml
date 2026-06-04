@@ -7,10 +7,11 @@
 
 ```
 .
+├── app.py              # FastAPI 網頁伺服器（Web 介面後端）
 ├── text_processor.py   # 資料處理：jieba 分詞、字典、文字轉數字、DataLoader
 ├── model.py            # 模型架構：Embedding + LSTM(2層) + Linear（含 Weight Tying）
-├── main.py             # 主程式：訓練迴圈 + 存讀檔 + 文字生成（Top-k + Temperature）
-├── test_main.py        # 單元測試 + 系統測試
+├── main.py             # 主程式：訓練迴圈 + 驗證 + 存讀檔 + 文字生成（Top-k + Temperature）
+├── test_main.py        # 單元測試 + 系統測試（v1.1）
 ├── test.sh             # 一鍵測試腳本
 ├── requirements.txt    # Python 套件依賴清單
 ├── _doc/               # 版本歷史紀錄
@@ -19,9 +20,21 @@
 │   ├── v0.3.md         # 測試框架
 │   ├── v0.4.md         # README 重寫
 │   ├── v1.0.md         # 專業化升級
-│   └── v1.1.md         # 詞層級 + Weight Tying + GPU + Top-k
+│   ├── v1.1.md         # 詞層級 + Weight Tying + GPU + Top-k
+│   └── v1.2.md         # 訓練優化 + Web 介面
+├── static/
+│   └── index.html      # Web 前端介面（雙欄控制面板 + 聊天室）
+├── tests/
+│   ├── __init__.py
+│   ├── test_unit.py    # 單元測試（v1.2 Web 版本）
+│   └── test_system.py  # 系統整合測試（FastAPI TestClient）
 ├── dataset.txt         # 外部訓練資料（手沖咖啡教學文）
 ├── model_checkpoint.pt # 訓練好的模型權重檔
+├── vocab.json          # 詞彙表（word_to_id / id_to_word）
+├── training_log.csv    # 訓練日誌（CSV 格式）
+├── training_log.txt    # 訓練日誌（純文字格式）
+├── checkpointHistory/  # Web 伺服器使用的模型存放區
+├── archive/            # 舊版 checkpoint 封存
 └── README.md           # 本檔案（繁體中文說明書）
 ```
 
@@ -40,6 +53,16 @@
   → torch.load()               # 下次直接讀取，不用重訓
   → generate_text()            # 文字接龍（Top-k + Temperature）
   → 輸出結果
+
+Web 介面資料流：
+
+```
+model_checkpoint.pt + vocab.json
+  → cp 到 checkpointHistory/
+  → 啟動 uvicorn app:app       # FastAPI 伺服器
+  → GET  /api/models           # 掃描可用模型
+  → POST /api/generate         # 接收前端參數，載入模型推論
+  → 回傳生成文字至前端展示
 ```
 
 ## 環境設定
@@ -79,9 +102,37 @@ python3 -m venv .venv
 2. 用 jieba 把文字切成詞
 3. 建立詞典（含 `<UNK>` 未知詞標記）
 4. 自動偵測你的電腦有沒有 GPU（CUDA）或 Apple Silicon（MPS），有的話就用，沒有就用 CPU
-5. 訓練 LSTM 模型 150 個回合
-6. 把訓練好的權心存到 `model_checkpoint.pt`
-7. 展示文字生成結果（用 Top-k + Temperature 抽樣）
+5. 訓練 LSTM 模型（預設 500 回合，含驗證集 90/10 分割）
+6. 使用 ReduceLROnPlateau 排程器 + Gradient Clipping 穩定訓練
+7. 把訓練好的權心存到 `model_checkpoint.pt`
+8. 同步儲存詞彙表至 `vocab.json`
+9. 展示文字生成結果（用 Top-k + Temperature 抽樣）
+
+### 啟動 Web 互動介面
+
+訓練完成後，可以用瀏覽器操作模型進行文字接龍：
+
+```bash
+# 把訓練好的模型複製到 checkpointHistory/
+cp model_checkpoint.pt checkpointHistory/
+
+# 啟動網頁伺服器
+.venv/bin/uvicorn app:app --reload --host 0.0.0.0 --port 8088
+```
+
+開啟瀏覽器前往 `http://localhost:8088`，你會看到：
+- **左側控制面板**：選擇模型、調整 Temperature / Top-k / 生成長度
+- **右側聊天區**：輸入開頭詞，模型會自動接龍
+
+### 將訓練好的模型放入 Web 介面
+
+```bash
+# 每次訓練完都要手動複製到 checkpointHistory/
+cp model_checkpoint.pt checkpointHistory/
+
+# 或直接將模型存到 checkpointHistory/ 下
+# Web 伺服器會自動掃描該目錄
+```
 
 ### 使用自己的訓練資料
 
@@ -105,22 +156,83 @@ chmod +x test.sh
 
 ```bash
 .venv/bin/python -m pytest test_main.py -v
+.venv/bin/python -m pytest tests/ -v
+```
+
+測試總數：**112 項**（93 項原始測試 + 19 項 Web 新增測試）
+
+### 手動執行測試（一鍵）
+
+```bash
+./test.sh
+```
+
+---
+
+## Web API 文件
+
+### `GET /api/models`
+
+回傳 `checkpointHistory/` 目錄下所有可用的 `.pt` 模型清單。
+
+**回應範例**：
+```json
+{
+  "models": [
+    {
+      "filename": "model_checkpoint.pt",
+      "size_bytes": 8231661,
+      "modified_time": "1717438123.0",
+      "vocab_size": 3924,
+      "embed_size": 256,
+      "hidden_size": 256,
+      "num_layers": 2
+    }
+  ]
+}
+```
+
+### `POST /api/generate`
+
+接受參數並讓指定模型進行文字接龍。
+
+**請求範例**：
+```json
+{
+  "start_word": "咖啡",
+  "model_filename": "model_checkpoint.pt",
+  "temperature": 0.8,
+  "top_k": 15,
+  "max_length": 20
+}
+```
+
+**回應範例**：
+```json
+{
+  "generated_text": "咖啡沖泡方式1：法式濾壓壺",
+  "model_filename": "model_checkpoint.pt",
+  "temperature": 0.8,
+  "top_k": 15,
+  "max_length": 20,
+  "inference_time_ms": 45.32
+}
 ```
 
 ## 模型超參數（可以調整的設定）
 
 | 參數 | 預設值 | 這是什麼？像什麼？ |
 |------|--------|-------------------|
-| `embed_size` | 64 | 每個詞用幾個數字來表達意思（就像用 64 個重點來描述一個詞） |
-| `hidden_size` | 64 | LSTM 的記憶容量（就像大腦可以記住 64 件事） |
+| `embed_size` | 256 | 每個詞用幾個數字來表達意思（就像用 256 個重點來描述一個詞） |
+| `hidden_size` | 256 | LSTM 的記憶容量（v1.2 從 64 提升至 256，配合 weight tying） |
 | `num_layers` | 2 | LSTM 疊幾層（2 層就像兩個過濾網疊在一起） |
-| `dropout` | 0.2 | 訓練時隨機忘掉 20% 的資訊，防止死背（就像老師遮住部分課本） |
-| `sequence_length` | 8 | 用前面幾個詞來猜下一個詞（就像看前面 8 個字來猜第 9 個） |
+| `dropout` | 0.1 | 訓練時隨機忘掉 10% 的資訊，防止死背（v1.2 從 0.2 調降） |
+| `sequence_length` | 15 | 用前面幾個詞來猜下一個詞（就像看前面 15 個詞來猜下一個） |
 | `batch_size` | 64 | 一次搬幾筆資料給模型（就像手推車一次載 64 箱貨） |
-| `learning_rate` | 0.01 | 每次調整參數的幅度（太大了會跌跌撞撞，太小了學很慢） |
-| `total_epochs` | 150 | 總共訓練幾回合 |
-| `temperature` | 0.8 | 控制生成文字的隨機度（越低越保守，越高越有創意） |
-| `top_k` | 5 | 只從最熱門的前 5 個詞中抽樣，避免選到奇怪的字 |
+| `learning_rate` | 0.001 | 每次調整參數的幅度（v1.2 從 5e-5 提升至 1e-3，Adam 標準值） |
+| `total_epochs` | 500 | 總共訓練幾回合（v1.2 從 15000 降至 500） |
+| `temperature` | 0.75 | 控制生成文字的隨機度（越低越保守，越高越有創意） |
+| `top_k` | 15 | 只從最熱門的前 15 個詞中抽樣，避免選到奇怪的字 |
 
 ## v1.1 新功能介紹
 

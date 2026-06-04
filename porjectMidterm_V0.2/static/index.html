@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LSTM 文字接龍</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: "Helvetica Neue", "Noto Sans TC", Arial, sans-serif;
+  display: flex; height: 100vh; background: #f5f5f5;
+}
+.sidebar {
+  width: 280px; background: #2c3e50; color: #ecf0f1;
+  padding: 20px; display: flex; flex-direction: column; gap: 18px;
+  overflow-y: auto; flex-shrink: 0;
+}
+.sidebar h2 { font-size: 18px; border-bottom: 1px solid #4a6274; padding-bottom: 10px; }
+.sidebar label { font-size: 13px; font-weight: bold; display: block; margin-bottom: 4px; }
+.sidebar select, .sidebar input { width: 100%; padding: 8px; border-radius: 6px; border: none; font-size: 14px; }
+.sidebar input[type="range"] { padding: 0; }
+.sidebar .value-display { font-size: 12px; color: #bdc3c7; margin-top: 2px; }
+.main {
+  flex: 1; display: flex; flex-direction: column; min-width: 0;
+}
+.chat-area {
+  flex: 1; overflow-y: auto; padding: 20px 24px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.msg {
+  max-width: 75%; padding: 12px 16px; border-radius: 12px;
+  line-height: 1.6; font-size: 15px; word-wrap: break-word;
+}
+.msg.user { background: #3498db; color: #fff; align-self: flex-end; border-radius: 12px 12px 2px 12px; }
+.msg.model { background: #fff; color: #2c3e50; align-self: flex-start; border-radius: 12px 12px 12px 2px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.msg.model .meta { font-size: 11px; color: #95a5a6; margin-top: 6px; }
+.input-area {
+  padding: 16px 24px; background: #fff; border-top: 1px solid #ddd;
+  display: flex; gap: 10px; align-items: center;
+}
+.input-area input {
+  flex: 1; padding: 10px 14px; border: 1px solid #ddd; border-radius: 20px;
+  font-size: 15px; outline: none;
+}
+.input-area input:focus { border-color: #3498db; }
+.input-area button {
+  padding: 10px 24px; background: #3498db; color: #fff; border: none;
+  border-radius: 20px; font-size: 15px; cursor: pointer;
+}
+.input-area button:hover { background: #2980b9; }
+.input-area button:disabled { background: #bdc3c7; cursor: not-allowed; }
+.status { font-size: 13px; color: #7f8c8d; padding: 4px 24px 0; }
+</style>
+</head>
+<body>
+<div class="sidebar">
+  <h2>控制面板</h2>
+  <div>
+    <label for="modelSelect">模型選擇</label>
+    <select id="modelSelect"><option value="">載入中...</option></select>
+  </div>
+  <div>
+    <label for="tempSlider">溫度 Temperature: <span id="tempValue">0.8</span></label>
+    <input type="range" id="tempSlider" min="0.1" max="2.0" step="0.1" value="0.8">
+    <div class="value-display">越低越保守，越高越有創意</div>
+  </div>
+  <div>
+    <label for="topkSlider">Top-k 採樣: <span id="topkValue">15</span></label>
+    <input type="range" id="topkSlider" min="1" max="50" step="1" value="15">
+    <div class="value-display">只從前 k 個熱門詞中選</div>
+  </div>
+  <div>
+    <label for="maxLenInput">生成長度（詞數）</label>
+    <input type="number" id="maxLenInput" min="1" max="50" value="15">
+  </div>
+</div>
+<div class="main">
+  <div class="chat-area" id="chatArea">
+    <div class="msg model">
+      你好！我是 LSTM 文字接龍模型。請在左側選擇模型、調整參數，然後輸入開頭詞讓我接龍。
+    </div>
+  </div>
+  <div class="status" id="statusBar">就緒</div>
+  <div class="input-area">
+    <input type="text" id="inputBox" placeholder="輸入開頭詞，例如：從、他、咖啡..." autofocus>
+    <button id="sendBtn">送出</button>
+  </div>
+</div>
+
+<script>
+const modelSelect = document.getElementById("modelSelect");
+const tempSlider = document.getElementById("tempSlider");
+const tempValue = document.getElementById("tempValue");
+const topkSlider = document.getElementById("topkSlider");
+const topkValue = document.getElementById("topkValue");
+const maxLenInput = document.getElementById("maxLenInput");
+const inputBox = document.getElementById("inputBox");
+const sendBtn = document.getElementById("sendBtn");
+const chatArea = document.getElementById("chatArea");
+const statusBar = document.getElementById("statusBar");
+
+tempSlider.addEventListener("input", () => { tempValue.textContent = tempSlider.value; });
+topkSlider.addEventListener("input", () => { topkValue.textContent = topkSlider.value; });
+
+async function loadModels() {
+  try {
+    const res = await fetch("/api/models");
+    const data = await res.json();
+    modelSelect.innerHTML = "";
+    if (data.models.length === 0) {
+      modelSelect.innerHTML = '<option value="">沒有可用的模型</option>';
+      return;
+    }
+    data.models.forEach(m => {
+      const opt = document.createElement("option");
+      opt.value = m.filename;
+      opt.textContent = `${m.filename} (詞彙${m.vocab_size}, 維度${m.embed_size})`;
+      modelSelect.appendChild(opt);
+    });
+  } catch (e) {
+    modelSelect.innerHTML = '<option value="">無法載入模型清單</option>';
+    console.error(e);
+  }
+}
+
+async function generate() {
+  const modelFilename = modelSelect.value;
+  if (!modelFilename) { alert("請先選擇模型"); return; }
+  const startWord = inputBox.value.trim();
+  if (!startWord) { alert("請輸入開頭詞"); return; }
+
+  const payload = {
+    start_word: startWord,
+    model_filename: modelFilename,
+    temperature: parseFloat(tempSlider.value),
+    top_k: parseInt(topkSlider.value),
+    max_length: parseInt(maxLenInput.value),
+  };
+
+  const userMsg = document.createElement("div");
+  userMsg.className = "msg user";
+  userMsg.textContent = startWord;
+  chatArea.appendChild(userMsg);
+  chatArea.scrollTop = chatArea.scrollHeight;
+
+  sendBtn.disabled = true;
+  statusBar.textContent = "模型生成中...";
+
+  const loadingMsg = document.createElement("div");
+  loadingMsg.className = "msg model";
+  loadingMsg.textContent = "思考中⋯";
+  chatArea.appendChild(loadingMsg);
+
+  try {
+    const res = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    loadingMsg.textContent = data.generated_text;
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = `模型: ${data.model_filename} | 溫度: ${data.temperature} | Top-k: ${data.top_k} | 耗時: ${data.inference_time_ms}ms`;
+    loadingMsg.appendChild(meta);
+    statusBar.textContent = "就緒";
+  } catch (e) {
+    loadingMsg.textContent = "生成失敗：" + e.message;
+    statusBar.textContent = "錯誤";
+  }
+  chatArea.scrollTop = chatArea.scrollHeight;
+  sendBtn.disabled = false;
+  inputBox.value = "";
+  inputBox.focus();
+}
+
+sendBtn.addEventListener("click", generate);
+inputBox.addEventListener("keydown", (e) => { if (e.key === "Enter") generate(); });
+
+loadModels();
+</script>
+</body>
+</html>

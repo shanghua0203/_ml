@@ -4,6 +4,7 @@ main.py —— 主程式與老闆（v1.2 專業升級版）
 """
 
 import os
+import json
 import csv
 import time
 import datetime
@@ -25,20 +26,30 @@ from model import MyLanguageModel
 
 CHECKPOINT_PATH = "model_checkpoint.pt"
 BATCH_SIZE = 64
-TOTAL_EPOCHS = 500
+TOTAL_EPOCHS = 1500
 LEARNING_RATE = 0.001
-SEQUENCE_LENGTH = 15
+SEQUENCE_LENGTH = 9
 TEMPERATURE = 0.75
 TOP_K = 15
-PATIENCE = 200
+PATIENCE = 45
 VAL_SPLIT = 0.1
 CLIP_GRAD_NORM = 1.0
+WEIGHT_DECAY = 1e-5
 
 
 story = load_external_text("dataset.txt")
 
 word_to_id, id_to_word, vocab_size = build_vocab(story)
 print(f"字典大小: {vocab_size}\n")
+
+VOCAB_PATH = "vocab.json"
+vocab_data = {
+    "word_to_id": word_to_id,
+    "id_to_word": {str(k): v for k, v in id_to_word.items()},
+}
+with open(VOCAB_PATH, "w", encoding="utf-8") as f:
+    json.dump(vocab_data, f, ensure_ascii=False, indent=2)
+print(f"詞彙表已儲存至: {VOCAB_PATH}\n")
 
 ids_sequence = text_to_ids(story, word_to_id)
 inputs, targets = prepare_training_data(ids_sequence, sequence_length=SEQUENCE_LENGTH)
@@ -65,12 +76,12 @@ print(f"批次大小: {BATCH_SIZE}，每輪訓練 {len(train_loader)} 批次，�
 device = auto_device()
 print(f"使用的運算裝置: {device}\n")
 
-model = MyLanguageModel(vocab_size, embed_size=256, hidden_size=256,
-                         num_layers=2, dropout=0.1)
+model = MyLanguageModel(vocab_size, embed_size=128, hidden_size=128,
+                         num_layers=2, dropout=0.5)
 model = model.to(device)
 
 loss_function = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 scheduler = optim.lr_scheduler.ReduceLROnPlateau(
     optimizer, mode='min', factor=0.5, patience=10
 )
@@ -81,8 +92,8 @@ log_csv_path = "training_log.csv"
 with open(log_txt_path, "w", encoding="utf-8") as f:
     f.write("LSTM 語言模型訓練日誌\n")
     f.write(f"啟動時間: {datetime.datetime.now()}\n")
-    f.write(f"vocab_size={vocab_size}, embed_size=256, hidden_size=256, "
-            f"num_layers=2, dropout=0.1\n")
+    f.write(f"vocab_size={vocab_size}, embed_size={model.embed_size}, hidden_size={model.hidden_size}, "
+            f"num_layers={model.lstm.num_layers}, dropout={model.dropout.p}\n")
     f.write(f"batch_size={BATCH_SIZE}, lr={LEARNING_RATE}, "
             f"sequence_length={SEQUENCE_LENGTH}")
     f.write(f", val_split={VAL_SPLIT}, clip_grad_norm={CLIP_GRAD_NORM}\n")
@@ -168,6 +179,8 @@ for epoch in range(TOTAL_EPOCHS):
         patience_counter += 1
         if patience_counter >= PATIENCE:
             print(f"\n[!] Val Loss 連續 {PATIENCE} 回合未改善，提前結束！(第 {epoch+1} 回合)")
+            print(f"載入最佳模型 (val_loss={best_val_loss:.4f})")
+            model.load_state_dict(torch.load(CHECKPOINT_PATH, weights_only=True))
             break
 
 print("=" * 50)
@@ -186,8 +199,8 @@ def load_model(model, checkpoint_path):
 
 
 print("\n--- 讀檔示範 ---")
-new_model = MyLanguageModel(vocab_size, embed_size=256, hidden_size=256,
-                             num_layers=2, dropout=0.1)
+new_model = MyLanguageModel(vocab_size, embed_size=model.embed_size, hidden_size=model.hidden_size,
+                             num_layers=model.lstm.num_layers, dropout=model.dropout.p)
 new_model = new_model.to(device)
 new_model = load_model(new_model, CHECKPOINT_PATH)
 

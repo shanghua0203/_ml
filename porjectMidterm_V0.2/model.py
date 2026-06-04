@@ -25,16 +25,16 @@ class MyLanguageModel(nn.Module):
     """
 
     def __init__(self, vocab_size, embed_size=256, hidden_size=256, num_layers=2,
-                 dropout=0.1, tie_weights=True):
+                 dropout=0.3, tie_weights=True):
         """
         初始化模型的三層結構。
 
         參數說明：
         - vocab_size：字典大小（總共有幾個不同的詞）
-        - embed_size：每個詞用幾個數字來表示（預設 64）
-        - hidden_size：LSTM 的記憶體容量（預設 64）
+        - embed_size：每個詞用幾個數字來表示（預設 256）
+        - hidden_size：LSTM 的記憶體容量（預設 256）
         - num_layers：LSTM 疊幾層（預設 2）
-        - dropout：隨機遺忘比例（預設 0.2，防止死背訓練資料）
+        - dropout：隨機遺忘比例（預設 0.3，防止死背訓練資料）
         - tie_weights：是否啟用權重共享（預設 True，開啟後 embed_size 會強制等於 hidden_size）
         """
         super().__init__()
