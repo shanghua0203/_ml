@@ -129,3 +129,73 @@ class TestLoadModelFromCheckpoint:
             x = torch.tensor([[1]])
             out, _ = loaded(x)
         assert torch.isfinite(out).all()
+
+
+class TestGenerateTextInference:
+    """測試 generate_text 的 UNK 遮罩與重複懲罰邏輯"""
+
+    def test_unk_logit_masked(self):
+        from app import generate_text
+        model = MyLanguageModel(vocab_size=5, embed_size=8, hidden_size=8,
+                                num_layers=1, dropout=0.0, tie_weights=True)
+        model.eval()
+        word_to_id = {"<UNK>": 0, "A": 1, "B": 2, "C": 3, "D": 4}
+        id_to_word = {0: "<UNK>", 1: "A", 2: "B", 3: "C", 4: "D"}
+
+        result = generate_text(
+            model, "A", word_to_id, id_to_word,
+            max_length=20, temperature=0.1, top_k=5, repetition_penalty=1.0,
+        )
+        assert "<UNK>" not in result, f"結果包含 <UNK>: {result}"
+
+    def test_repetition_penalty_changes_output(self):
+        from app import generate_text
+        model = MyLanguageModel(vocab_size=5, embed_size=8, hidden_size=8,
+                                num_layers=1, dropout=0.0, tie_weights=True)
+        model.eval()
+        word_to_id = {"<UNK>": 0, "A": 1, "B": 2, "C": 3, "D": 4}
+        id_to_word = {0: "<UNK>", 1: "A", 2: "B", 3: "C", 4: "D"}
+
+        torch.manual_seed(42)
+        result_no_penalty = generate_text(
+            model, "A", word_to_id, id_to_word,
+            max_length=30, temperature=0.8, top_k=5, repetition_penalty=1.0,
+        )
+
+        torch.manual_seed(42)
+        result_with_penalty = generate_text(
+            model, "A", word_to_id, id_to_word,
+            max_length=30, temperature=0.8, top_k=5, repetition_penalty=2.0,
+        )
+
+        assert result_no_penalty != result_with_penalty, (
+            "重複懲罰應改變生成結果"
+        )
+
+    def test_unk_masked_even_with_small_topk(self):
+        from app import generate_text
+        model = MyLanguageModel(vocab_size=5, embed_size=8, hidden_size=8,
+                                num_layers=1, dropout=0.0, tie_weights=True)
+        model.eval()
+        word_to_id = {"<UNK>": 0, "A": 1, "B": 2, "C": 3, "D": 4}
+        id_to_word = {0: "<UNK>", 1: "A", 2: "B", 3: "C", 4: "D"}
+
+        result = generate_text(
+            model, "A", word_to_id, id_to_word,
+            max_length=10, temperature=0.1, top_k=1, repetition_penalty=1.0,
+        )
+        assert "<UNK>" not in result, f"top_k=1 時仍出現 <UNK>: {result}"
+
+    def test_generated_text_never_empty(self):
+        from app import generate_text
+        model = MyLanguageModel(vocab_size=5, embed_size=8, hidden_size=8,
+                                num_layers=1, dropout=0.0, tie_weights=True)
+        model.eval()
+        word_to_id = {"<UNK>": 0, "A": 1, "B": 2, "C": 3, "D": 4}
+        id_to_word = {0: "<UNK>", 1: "A", 2: "B", 3: "C", 4: "D"}
+
+        result = generate_text(
+            model, "A", word_to_id, id_to_word,
+            max_length=1, temperature=2.0, top_k=5, repetition_penalty=2.0,
+        )
+        assert len(result) >= 1

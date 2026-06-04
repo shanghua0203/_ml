@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from model import MyLanguageModel
-from text_processor import tokenize
+from text_processor import tokenize, UNK_TOKEN
 
 
 CHECKPOINT_DIR = "checkpointHistory"
@@ -38,6 +38,7 @@ class GenerateRequest(BaseModel):
     temperature: float = 0.8
     top_k: int = 15
     max_length: int = 15
+    repetition_penalty: float = 1.2
 
 
 class GenerateResponse(BaseModel):
@@ -46,6 +47,7 @@ class GenerateResponse(BaseModel):
     temperature: float
     top_k: int
     max_length: int
+    repetition_penalty: float
     inference_time_ms: float
 
 
@@ -123,17 +125,30 @@ def get_cached_model(model_filename):
 
 
 def generate_text(model, start_word, word_to_id, id_to_word,
-                  max_length=15, temperature=0.8, top_k=15):
+                  max_length=15, temperature=0.8, top_k=15,
+                  repetition_penalty=1.2):
     model.eval()
-    start_id = word_to_id.get(start_word, 0)
+    unk_id = word_to_id.get(UNK_TOKEN, 0)
+    start_id = word_to_id.get(start_word, unk_id)
     generated_words = [id_to_word[start_id]]
+    generated_ids = [start_id]
     current_input = torch.tensor([[start_id]], device=next(model.parameters()).device)
     current_hidden = None
     with torch.no_grad():
         for _ in range(max_length):
             output, current_hidden = model(current_input, current_hidden)
             logits = output.squeeze(0).squeeze(0)
+
+            logits[unk_id] = float("-inf")
+
+            for gid in set(generated_ids):
+                if logits[gid] > 0:
+                    logits[gid] /= repetition_penalty
+                else:
+                    logits[gid] *= repetition_penalty
+
             if top_k > 0:
+                top_k = min(top_k, logits.size(0))
                 values, indices = torch.topk(logits, top_k)
                 mask = torch.full_like(logits, float("-inf"))
                 mask.scatter_(0, indices, values)
@@ -143,6 +158,7 @@ def generate_text(model, start_word, word_to_id, id_to_word,
             next_id = torch.multinomial(probs, 1).item()
             next_word = id_to_word[next_id]
             generated_words.append(next_word)
+            generated_ids.append(next_id)
             current_input = torch.tensor([[next_id]], device=current_input.device)
     return "".join(generated_words)
 
@@ -191,6 +207,7 @@ def generate(req: GenerateRequest):
         max_length=req.max_length,
         temperature=req.temperature,
         top_k=req.top_k,
+        repetition_penalty=req.repetition_penalty,
     )
     elapsed = (time.time() - t0) * 1000
     return GenerateResponse(
@@ -199,6 +216,7 @@ def generate(req: GenerateRequest):
         temperature=req.temperature,
         top_k=req.top_k,
         max_length=req.max_length,
+        repetition_penalty=req.repetition_penalty,
         inference_time_ms=round(elapsed, 2),
     )
 

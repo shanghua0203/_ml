@@ -20,6 +20,7 @@ from text_processor import (
     create_dataloader,
     TextDataset,
     auto_device,
+    UNK_TOKEN,
 )
 from model import MyLanguageModel
 
@@ -28,18 +29,20 @@ CHECKPOINT_PATH = "model_checkpoint.pt"
 BATCH_SIZE = 64
 TOTAL_EPOCHS = 1500
 LEARNING_RATE = 0.001
-SEQUENCE_LENGTH = 9
+SEQUENCE_LENGTH = 20
 TEMPERATURE = 0.75
 TOP_K = 15
-PATIENCE = 45
+PATIENCE = 1000
 VAL_SPLIT = 0.1
 CLIP_GRAD_NORM = 1.0
 WEIGHT_DECAY = 1e-5
+MIN_FREQ = 3
+REPETITION_PENALTY = 1.2
 
 
 story = load_external_text("dataset.txt")
 
-word_to_id, id_to_word, vocab_size = build_vocab(story)
+word_to_id, id_to_word, vocab_size = build_vocab(story, min_freq=MIN_FREQ)
 print(f"字典大小: {vocab_size}\n")
 
 VOCAB_PATH = "vocab.json"
@@ -77,13 +80,13 @@ device = auto_device()
 print(f"使用的運算裝置: {device}\n")
 
 model = MyLanguageModel(vocab_size, embed_size=128, hidden_size=128,
-                         num_layers=2, dropout=0.5)
+                         num_layers=2, dropout=0.3)
 model = model.to(device)
 
-loss_function = nn.CrossEntropyLoss()
+loss_function = nn.CrossEntropyLoss(label_smoothing=0.1)
 optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-    optimizer, mode='min', factor=0.5, patience=10
+    optimizer, mode='min', factor=0.5, patience=10, min_lr=1e-5
 )
 
 log_txt_path = "training_log.txt"
@@ -96,7 +99,7 @@ with open(log_txt_path, "w", encoding="utf-8") as f:
             f"num_layers={model.lstm.num_layers}, dropout={model.dropout.p}\n")
     f.write(f"batch_size={BATCH_SIZE}, lr={LEARNING_RATE}, "
             f"sequence_length={SEQUENCE_LENGTH}")
-    f.write(f", val_split={VAL_SPLIT}, clip_grad_norm={CLIP_GRAD_NORM}\n")
+    f.write(f", val_split={VAL_SPLIT}, clip_grad_norm={CLIP_GRAD_NORM}, min_freq={MIN_FREQ}, rep_penalty={REPETITION_PENALTY}\n")
     f.write("=" * 80 + "\n")
     f.write(f"{'epoch':>6} | {'train_loss':>10} | {'val_loss':>10} | "
             f"{'lr':>12} | {'grad_norm':>10} | {'time':>20}\n")
@@ -208,6 +211,7 @@ new_model = load_model(new_model, CHECKPOINT_PATH)
 def top_k_filter(logits, k=5):
     if k <= 0:
         return logits
+    k = min(k, logits.size(0))
     values, indices = torch.topk(logits, k)
     mask = torch.full_like(logits, float("-inf"))
     mask.scatter_(0, indices, values)
@@ -215,11 +219,14 @@ def top_k_filter(logits, k=5):
 
 
 def generate_text(model, start_word, word_to_id, id_to_word,
-                  max_length=15, temperature=0.8, top_k=5):
+                  max_length=15, temperature=0.8, top_k=5,
+                  repetition_penalty=1.2):
     model.eval()
 
-    start_id = word_to_id.get(start_word, 0)
+    unk_id = word_to_id.get(UNK_TOKEN, 0)
+    start_id = word_to_id.get(start_word, unk_id)
     generated_words = [id_to_word[start_id]]
+    generated_ids = [start_id]
 
     current_input = torch.tensor([[start_id]], device=next(model.parameters()).device)
     current_hidden = None
@@ -230,6 +237,14 @@ def generate_text(model, start_word, word_to_id, id_to_word,
 
             logits = output.squeeze(0).squeeze(0)
 
+            logits[unk_id] = float("-inf")
+
+            for gid in set(generated_ids):
+                if logits[gid] > 0:
+                    logits[gid] /= repetition_penalty
+                else:
+                    logits[gid] *= repetition_penalty
+
             if top_k > 0:
                 logits = top_k_filter(logits, k=top_k)
 
@@ -239,6 +254,7 @@ def generate_text(model, start_word, word_to_id, id_to_word,
             next_id = torch.multinomial(probabilities, 1).item()
             next_word = id_to_word[next_id]
             generated_words.append(next_word)
+            generated_ids.append(next_id)
             current_input = torch.tensor([[next_id]], device=current_input.device)
 
     return "".join(generated_words)
@@ -255,7 +271,8 @@ for temp in temperatures:
     print("-" * 40)
     for word in starting_words:
         result = generate_text(new_model, word, word_to_id, id_to_word,
-                               max_length=15, temperature=temp, top_k=TOP_K)
+                               max_length=15, temperature=temp, top_k=TOP_K,
+                               repetition_penalty=REPETITION_PENALTY)
         print(f"開頭「{word}」 -> {result}")
 
 print("\n" + "=" * 50)

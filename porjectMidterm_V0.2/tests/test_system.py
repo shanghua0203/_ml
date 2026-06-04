@@ -97,6 +97,7 @@ class TestGenerateText:
             "temperature": 0.8,
             "top_k": 5,
             "max_length": 10,
+            "repetition_penalty": 1.5,
         })
         assert resp.status_code == 200
         data = resp.json()
@@ -107,6 +108,7 @@ class TestGenerateText:
         assert data["temperature"] == 0.8
         assert data["top_k"] == 5
         assert data["max_length"] == 10
+        assert data["repetition_penalty"] == 1.5
         assert data["inference_time_ms"] > 0
 
     def test_with_unknown_start_word(self, setup_checkpoint_dir):
