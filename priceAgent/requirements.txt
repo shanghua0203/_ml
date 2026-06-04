@@ -1,0 +1,25 @@
+# 核心框架
+langchain
+langchain-community
+langchain-core
+
+# 本地 LLM (Ollama)
+langchain-ollama
+
+# 搜尋與網頁抓取
+brave-search
+crawl4ai
+
+# 資料驗證
+pydantic
+
+# 工具函式庫
+python-dotenv
+aiohttp
+
+# 非同步資料庫
+aiosqlite
+
+# 測試
+pytest
+pytest-asyncio

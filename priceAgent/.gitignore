@@ -1,0 +1,46 @@
+# 虛擬環境
+.venv/
+venv/
+env/
+__pycache__/
+
+# 環境變數（包含敏感資訊）
+.env
+.env.local
+.env.*.local
+
+# 資料庫與快取
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+cache/
+
+# IDE 檔案
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# 測試
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# 編譯檔案
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Ollama
+.ollama/
+
+# macOS
+.DS_Store
+Thumbs.db

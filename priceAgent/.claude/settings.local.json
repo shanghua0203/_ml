@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 *)",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(.venv/bin/pip show *)",
+      "Bash(.venv/bin/pip list *)",
+      "Bash(.venv/bin/python *)",
+      "Bash(BRAVE_API_KEY=\"\" .venv/bin/python *)",
+      "Bash(curl -s http://localhost:11434/api/tags)",
+      "Bash(git add *)",
+      "Bash(git -C /home/shanghua/claudeCode/claude_ML_Project init)",
+      "Bash(git -C /home/shanghua/claudeCode/claude_ML_Project config user.name \"Claude\")",
+      "Bash(git -C /home/shanghua/claudeCode/claude_ML_Project config user.email \"claude@example.com\")",
+      "Bash(git commit *)",
+      "Bash(git remote *)",
+      "Bash(git push *)",
+      "Bash(python *)",
+      "Bash(pip3 install *)",
+      "Bash(pip install *)",
+      "Bash(PYTHONPATH=/home/shanghua/claudeCode/claude_ML_Project python3 *)",
+      "Bash(head -n 467 src/agents/price_guard.py)",
+      "Bash(tail -n +553 src/agents/price_guard.py)",
+      "Bash(mv /tmp/price_guard_temp.py src/agents/price_guard.py)"
+    ]
+  }
+}
