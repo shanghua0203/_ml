@@ -1,103 +1,347 @@
-# 問答對資料集預處理工具
+# ContentProcess — 中文問答資料處理與 LoRA 微調 Pipeline
 
-## 概述
+將原始純文字檔轉換為 LLM 微調可用的結構化資料集，並支援以 LoRA 微調 Mamba（SSM）模型。
 
-本工具將 `output.jsonl`（格式：`{"prompt": "...", "completion": "..."}`）轉換為經過分詞（Tokenization）的資料集，可直接用於 Hugging Face `Trainer` 或 LLaMA-Factory 等微調框架。
-
-## 流程
+## 專案結構
 
 ```
-output.jsonl  ──→  套用對話模板 (Chat Template)  ──→  分詞 (Tokenization)  ──→  tokenized_dataset/
+contentProcess/
+├── data/
+│   ├── raw/
+│   │   └── input.txt                  ← 原始純文字（約 7 萬字）
+│   └── processed/
+│       ├── output.jsonl                ← 生成的問答對（JSONL）
+│       └── tokenized_dataset/          ← 分詞後的資料集
+├── scripts/
+│   ├── config.py                       # 超參數集中管理（LoRA、訓練參數）
+│   ├── model_utils.py                  # 載入 Mamba + 套 LoRA
+│   ├── data_utils.py                   # 載入資料集 + DataCollator
+│   ├── train.py                        # LoRA 微調主腳本
+│   ├── inference_test.py               # 推理測試腳本
+│   ├── generate_qa.py                  # Stage 1：文本 → 問答對
+│   ├── preprocess_dataset.py           # Stage 2：問答對 → Tokenized Dataset
+│   └── mamba_inference.py              # Stage 3：Mamba 推論測試
+├── tests/
+│   ├── test_config.py                  # 10 項—參數型別/範圍
+│   ├── test_data_utils.py              # 5 項—資料集欄位/長度
+│   └── test_model_utils.py             # 5 項—模型載入/LoRA 包裝
+├── docs/
+│   ├── task0.0.md
+│   ├── task0.1.md
+│   ├── task0.2.md
+│   └── task0.3.md
+├── coffee_mamba_lora/                  # LoRA 微調後權重輸出
+├── test.sh                             # 一鍵整合測試
+├── .venv/                              # Python 虛擬環境
+└── README.md
 ```
 
-## 環境需求
+## Pipeline 流程
 
-- Python 3.10+
-- `transformers`
-- `datasets`
-- `jinja2`
+```
+input.txt
+    │
+    ▼
+Stage 1: generate_qa.py  ──→  output.jsonl（問答對）
+    │
+    ▼
+Stage 2: preprocess_dataset.py  ──→  tokenized_dataset/（分詞資料集）
+    │
+    ▼
+Stage 3: mamba_inference.py（Mamba 推論測試，可選）
+    │
+    ▼
+Stage 4: train.py（LoRA 微調 Mamba-1.4B）
+    │
+    ▼
+coffee_mamba_lora/（訓練後 LoRA 權重）
+```
+
+---
+
+## 環境設定
 
 ```bash
-pip install transformers datasets jinja2
+# 啟動虛擬環境
+source .venv/bin/activate
+
+# 若從頭建立環境
+python3 -m venv .venv
+source .venv/bin/activate
+pip install transformers datasets jinja2 ollama torch tqdm peft pytest
 ```
 
-## 使用方法
+---
 
-### 基本執行
+## Stage 1：文本 → 問答對（generate_qa.py）
+
+將 `input.txt` 切割後透過 Ollama（`gemma3:4b`）生成問答對。
+
+### 執行
 
 ```bash
-python preprocess_dataset.py
+source .venv/bin/activate
+python scripts/generate_qa.py
 ```
 
-### 設定參數
-
-編輯 `preprocess_dataset.py` 頂部的變數：
+### 設定參數（編輯 `scripts/generate_qa.py` 頂部）
 
 | 變數 | 預設值 | 說明 |
 |---|---|---|
-| `INPUT_FILE` | `output.jsonl` | 輸入的 JSONL 檔案路徑 |
-| `OUTPUT_DIR` | `tokenized_dataset` | 輸出資料夾名稱 |
-| `MODEL_NAME` | `Qwen/Qwen2.5-7B-Instruct` | 分詞器模型名稱或本地路徑 |
-| `MAX_LENGTH` | `2048` | 單筆序列最大 Token 長度（超出截斷） |
+| `INPUT_FILE` | `data/raw/input.txt` | 原始輸入文字檔 |
+| `OUTPUT_FILE` | `data/processed/output.jsonl` | 輸出的問答對 JSONL |
+| `MODEL` | `gemma3:4b` | Ollama 模型名稱 |
+| `CHUNK_MIN` | `200` | 切割區塊最小字數 |
+| `CHUNK_MAX` | `500` | 切割區塊最大字數 |
 
-### 自訂分詞器
+### 運作機制
 
-若使用其他模型（如 Llama、Gemma），修改 `MODEL_NAME` 即可：
+1. 將長文本按段落 → 句子切分成 200–500 字的區塊
+2. 每區塊送入 Ollama，搭配 system prompt 要求輸出 `{"qa_pairs": [...]}`
+3. 解析 JSON，每組問答對立即 append 寫入 `output.jsonl`
+4. 使用 `tqdm` 顯示進度，JSON 解析失敗則跳過不中斷
 
-```python
-MODEL_NAME = "google/gemma-2-2b-it"       # Gemma
-MODEL_NAME = "meta-llama/Llama-3.2-3B-Instruct"  # Llama
-MODEL_NAME = "/path/to/local/tokenizer"   # 本地分詞器路徑
+### 輸出格式
+
+```json
+{"prompt": "手沖咖啡需要哪些器具？", "completion": "手沖咖啡需要濾杯、濾紙、手沖壺、電子秤等器具。"}
+{"prompt": "如何控制手沖咖啡的水溫？", "completion": "建議水溫在 80-90°C 之間，淺焙用較高溫，深焙用較低溫。"}
 ```
 
-## 輸出格式
+### 前置需求
 
-`tokenized_dataset/` 資料夾包含：
+- Ollama 需在背景執行，且有 `gemma3:4b` 模型
+- 確認方法：`curl http://localhost:11434/api/tags`
+
+---
+
+## Stage 2：問答對 → Tokenized Dataset（preprocess_dataset.py）
+
+將 JSONL 問答對轉換為 Hugging Face 格式的分詞資料集，可直接用於微調框架。
+
+### 執行
+
+```bash
+source .venv/bin/activate
+python scripts/preprocess_dataset.py
+```
+
+### 設定參數（編輯 `scripts/preprocess_dataset.py` 頂部）
+
+| 變數 | 預設值 | 說明 |
+|---|---|---|
+| `INPUT_FILE` | `data/processed/output.jsonl` | 輸入的 JSONL 檔 |
+| `OUTPUT_DIR` | `data/processed/tokenized_dataset` | 輸出資料夾 |
+| `MODEL_NAME` | `Qwen/Qwen2.5-7B-Instruct` | 分詞器模型 |
+| `MAX_LENGTH` | `2048` | 最大 Token 長度 |
+
+### 運作機制
+
+1. `datasets.load_dataset("json", ...)` 讀取 JSONL
+2. 對每筆資料建立對話結構並套用 `apply_chat_template()`
+3. `dataset.map(process_batch, batched=True)` 批次分詞
+4. `save_to_disk()` 儲存為 Arrow 格式
+
+對話模板結果範例：
+```
+<|im_start|>user
+手沖咖啡需要哪些器具？<|im_end|>
+<|im_start|>assistant
+需要濾杯、濾紙、手沖壺等。<|im_end|>
+```
+
+### 輸出資料夾結構
 
 ```
-tokenized_dataset/
+data/processed/tokenized_dataset/
 ├── data-00000-of-00001.arrow    # 分詞後的資料（input_ids, attention_mask, length）
-├── dataset_info.json            # 資料集中繼資料
+├── dataset_info.json            # 中繼資料
 └── state.json                   # 狀態資訊
 ```
 
-使用 Hugging Face `datasets` 載入：
+### 載入方式
 
 ```python
 from datasets import load_from_disk
-dataset = load_from_disk("tokenized_dataset")
-# dataset[0] → {"input_ids": [...], "attention_mask": [...], "length": 87}
+dataset = load_from_disk("data/processed/tokenized_dataset")
 ```
 
-## 與微調框架對接
+---
 
-### LLaMA-Factory
+## Stage 3：Mamba 模型推論（mamba_inference.py）
 
-將 `tokenized_dataset` 目錄路徑填入 `dataset_dir`，或將資料複製到 LLaMA-Factory 的 `data/` 目錄下。
+載入 Hugging Face 上的 Mamba（SSM 架構）模型並執行對話測試。
 
-### Hugging Face Trainer
+### 執行
+
+```bash
+source .venv/bin/activate
+python scripts/mamba_inference.py
+```
+
+### 切換模型
+
+編輯 `scripts/mamba_inference.py` 中的 `MODEL_NAME`：
+
+| 模型名稱 | 參數量 | 說明 |
+|---|---|---|
+| `state-spaces/mamba-130m-hf` | 130M | 輕量快速 |
+| `state-spaces/mamba-370m-hf` | 370M | 平衡型 |
+| `state-spaces/mamba-790m-hf` | 790M | 中量級 |
+| `state-spaces/mamba-1.4b-hf` | 1.4B | 目前預設 |
+| `state-spaces/mamba-2.8b-hf` | 2.8B | 最大量級 |
+
+### 運作機制
+
+1. 自動偵測硬體：CUDA → MPS → CPU
+2. 載入 `AutoTokenizer` + `AutoModelForCausalLM`
+3. 將模型移至對應裝置，設為 evaluation mode
+4. 執行 Wake-up Test：輸入「你好」，觀察模型回應
+
+---
+
+## Stage 4：Mamba LoRA 微調（train.py）
+
+使用 LoRA 微調 `state-spaces/mamba-1.4b-hf` 模型，將問答資料集訓練進模型中。
+
+### 架構（模組化拆分）
+
+`scripts/` 下四個檔案分工明確，總行數超過 1000 行時強制拆分：
+
+| 檔案 | 職責 | 行數 |
+|---|---|---|
+| `config.py` | 所有超參數集中管理 | ~10 行 |
+| `model_utils.py` | 載入 Mamba 模型、套 LoRA、硬體偵測 | ~40 行 |
+| `data_utils.py` | 載入 tokenized_dataset、建立 DataCollator | ~15 行 |
+| `train.py` | 組裝 Trainer、執行訓練、儲存權重 | ~50 行 |
+
+### 執行訓練
+
+```bash
+source .venv/bin/activate
+python scripts/train.py
+```
+
+### 超參數一覽（編輯 `scripts/config.py`）
+
+| 參數 | 預設值 | 說明 |
+|---|---|---|
+| `MODEL_NAME` | `state-spaces/mamba-1.4b-hf` | 微調的基礎模型 |
+| `LORA_R` | `8` | LoRA 秩（rank），愈大學習能力愈強但愈吃記憶體 |
+| `LORA_ALPHA` | `16` | LoRA 縮放係數，通常為 r 的 2 倍 |
+| `LORA_DROPOUT` | `0.05` | 隨機丟棄率，防止過擬合 |
+| `TARGET_MODULES` | `["in_proj", "x_proj"]` | Mamba 的核心投影層（PEFT 相容限制，排除 out_proj） |
+| `BATCH_SIZE` | `1` | 單張 GPU 每次處理的樣本數 |
+| `GRADIENT_ACCUMULATION_STEPS` | `4` | 梯度累積步數（等效 batch_size = 1×4 = 4） |
+| `LEARNING_RATE` | `2e-4` | 學習率 |
+| `NUM_EPOCHS` | `3` | 訓練輪數 |
+| `LOGGING_STEPS` | `10` | 每 10 步印一次 loss |
+| `LOG_FILE` | `data/processed/training_log.jsonl` | 損失值記錄檔（JSONL） |
+
+### 訓練資源預估
+
+| 項目 | 估算 |
+|---|---|
+| 可訓練參數 | ~1.4M（佔全模型的 ~0.1%） |
+| GPU VRAM | ~5-6 GB |
+| 訓練時間（3 epochs × 774 筆） | ~30-60 分鐘 |
+| 輸出 LoRA 權重大小 | ~10-15 MB（`coffee_mamba_lora/`） |
+
+### 損失值記錄
+
+訓練過程中每個 `logging_steps`（預設 10 步）自動寫入 `data/processed/training_log.jsonl`：
+
+```json
+{"step": 10, "epoch": 0.12, "loss": 2.345678, "timestamp": "2026-06-04T15:30:00"}
+{"step": 20, "epoch": 0.24, "loss": 2.123456, "timestamp": "2026-06-04T15:31:00"}
+```
+
+可用來繪製 loss 曲線或監控訓練收斂情況。
+
+### 輸出格式
+
+訓練完成後產生 `coffee_mamba_lora/` 資料夾，僅儲存 LoRA 外掛權重（不含 base model）：
+
+```
+coffee_mamba_lora/
+├── adapter_config.json       # LoRA 設定
+├── adapter_model.safetensors  # LoRA 權重（~10MB）
+└── tokenizer.json            # 分詞器
+```
+
+### 載入訓練後的模型
 
 ```python
-from datasets import load_from_disk
-from transformers import AutoModelForCausalLM, Trainer
+from peft import PeftModel
+from transformers import AutoModelForCausalLM
 
-dataset = load_from_disk("tokenized_dataset")
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
-
-trainer = Trainer(
-    model=model,
-    train_dataset=dataset,
-    tokenizer=tokenizer,
-    # ...
-)
-trainer.train()
+# 先載入 base model，再掛上 LoRA 權重
+base_model = AutoModelForCausalLM.from_pretrained("state-spaces/mamba-1.4b-hf")
+model = PeftModel.from_pretrained(base_model, "./coffee_mamba_lora")
 ```
 
-## 統計數據
+---
 
-執行完畢後會自動印出：
+## 測試
 
-- 總問答筆數
-- 每筆平均 Token 數
-- 每筆最多 Token 數
-- 總 Token 數
+### 執行整合測試
+
+```bash
+source .venv/bin/activate
+bash test.sh
+```
+
+測試流程：
+1. **語法檢查** — 所有 Python 檔案 `py_compile`
+2. **單元測試** — pytest 20 項（參數驗證、資料集載入、模型/LoRA 包裝）
+3. **系統測試** — 推理測試（3 組 prompt 確認模型能正常生成）
+4. **資料集完整性檢查** — 路徑存在、筆數、欄位、總 tokens
+
+### 測試清單
+
+| 測試檔案 | 測試項 | 測試內容 |
+|---|---|---|
+| `tests/test_config.py` | 10 項 | 參數型別、正數範圍、dropout 區間、seq_length 合理性 |
+| `tests/test_data_utils.py` | 5 項 | 資料集載入、欄位存在、input_ids 合法性、長度一致、max_length |
+| `tests/test_model_utils.py` | 5 項 | 模型載入、分詞器載入、LoRA 包裝（可訓練參數 > 0）、CUDA 偵測、中文編碼 |
+
+---
+
+## 完整工作流程
+
+```bash
+# 0. 進入專案
+cd contentProcess
+source .venv/bin/activate
+
+# 1. 將原始文字放入 data/raw/input.txt
+# 2. 生成問答對（確認 Ollama 有在跑）
+python scripts/generate_qa.py
+
+# 3. 預處理為 Tokenized Dataset
+python scripts/preprocess_dataset.py
+
+# 4. （可選）載入 Mamba 模型做推論測試
+python scripts/mamba_inference.py
+
+# 5. 執行 LoRA 微調
+python scripts/train.py
+
+# 6. 執行全部測試
+bash test.sh
+```
+
+---
+
+## 當前統計數據
+
+| 項目 | 數值 |
+|---|---|
+| 原始文字 | 69,399 字 |
+| 生成問答對 | 774 筆 |
+| 平均 Token 數/筆 | 86.5 |
+| 最多 Token 數/筆 | 204 |
+| 總 Token 數 | 66,988 |
+| Mamba 模型 | state-spaces/mamba-1.4b-hf（1.37B 參數） |
+| LoRA 可訓練參數 | ~1.4M（佔全模型 ~0.1%） |
+| 單元測試 | 20 項全部通過 |

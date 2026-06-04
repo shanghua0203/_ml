@@ -5,8 +5,8 @@ from pathlib import Path
 from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 
-INPUT_FILE = "output.jsonl"
-OUTPUT_DIR = "tokenized_dataset"
+INPUT_FILE = "data/processed/output.jsonl"
+OUTPUT_DIR = "data/processed/tokenized_dataset"
 MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
 MAX_LENGTH = 2048
 

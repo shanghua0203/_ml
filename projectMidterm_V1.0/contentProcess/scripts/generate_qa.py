@@ -6,8 +6,8 @@ from pathlib import Path
 import ollama
 from tqdm import tqdm
 
-INPUT_FILE = "input.txt"
-OUTPUT_FILE = "output.jsonl"
+INPUT_FILE = "data/raw/input.txt"
+OUTPUT_FILE = "data/processed/output.jsonl"
 MODEL = "gemma3:4b"
 CHUNK_MIN = 200
 CHUNK_MAX = 500
@@ -19,7 +19,8 @@ SYSTEM_PROMPT = (
     "2. 生成 3 到 5 組問答對，從不同角度涵蓋文本內容\n"
     "3. 問題必須基於文本，措辭具體且明確\n"
     "4. 答案必須詳細、準確、完整\n"
-    "5. 每組問答對的內容不能重複\n\n"
+    "5. 每組問答對的內容不能重複\n"
+    "6. 請使用繁體中文（正體字）回答，不要使用簡體字\n\n"
     "你必須嚴格按照以下 JSON 格式輸出，不能包含任何其他文字、標記或程式碼區塊：\n"
     '{"qa_pairs": [{"prompt": "問題1", "completion": "答案1"}, {"prompt": "問題2", "completion": "答案2"}]}'
 )
