@@ -1,5 +1,5 @@
 MODEL_NAME = "state-spaces/mamba-1.4b-hf"
-DATASET_PATH = "data/processed/tokenized_dataset"
+DATASET_PATH = "data/processed/output.jsonl"
 OUTPUT_DIR = "./coffee_mamba_lora"
 LOG_FILE = "data/processed/training_log.jsonl"
 

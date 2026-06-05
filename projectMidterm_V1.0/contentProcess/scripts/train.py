@@ -46,7 +46,7 @@ def main():
     tokenizer = load_tokenizer()
     model = load_base_model()
     model = apply_lora(model)
-    dataset = load_dataset()
+    dataset = load_dataset(tokenizer)
     data_collator = create_data_collator(tokenizer)
 
     training_args = TrainingArguments(
