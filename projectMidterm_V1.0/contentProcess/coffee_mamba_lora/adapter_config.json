@@ -30,8 +30,8 @@
   "rank_pattern": {},
   "revision": null,
   "target_modules": [
-    "x_proj",
-    "in_proj"
+    "in_proj",
+    "x_proj"
   ],
   "target_parameters": null,
   "task_type": "CAUSAL_LM",
