@@ -20,11 +20,16 @@ contentProcess/
 │   ├── inference_test.py               # 推理測試腳本
 │   ├── generate_qa.py                  # Stage 1：文本 → 問答對
 │   ├── preprocess_dataset.py           # Stage 2：問答對 → Tokenized Dataset
-│   └── mamba_inference.py              # Stage 3：Mamba 推論測試
+│   ├── mamba_inference.py              # Stage 3：Mamba 推論（CLI + LoRA + 互動模式）
+│   └── main.py                         # Stage 5：FastAPI 聊天網頁後端
+├── static/
+│   └── index.html                      # Stage 5：前端聊天頁面
 ├── tests/
 │   ├── test_config.py                  # 10 項—參數型別/範圍
 │   ├── test_data_utils.py              # 5 項—資料集欄位/長度
-│   └── test_model_utils.py             # 5 項—模型載入/LoRA 包裝
+│   ├── test_model_utils.py             # 5 項—模型載入/LoRA 包裝
+│   ├── test_mamba_inference.py         # 4 項—命令列參數解析
+│   └── test_main.py                    # 5 項—Web API 整合測試
 ├── docs/
 │   ├── task0.0.md
 │   ├── task0.1.md
@@ -33,6 +38,8 @@ contentProcess/
 ├── coffee_mamba_lora/                  # LoRA 微調後權重輸出
 ├── test.sh                             # 一鍵整合測試
 ├── .venv/                              # Python 虛擬環境
+├── task1.0.md                          # Stage 3 升級規格
+├── task1.1.md                          # Web 聊天應用規格
 └── README.md
 ```
 
@@ -48,13 +55,16 @@ Stage 1: generate_qa.py  ──→  output.jsonl（問答對）
 Stage 2: preprocess_dataset.py  ──→  tokenized_dataset/（分詞資料集）
     │
     ▼
-Stage 3: mamba_inference.py（Mamba 推論測試，可選）
+Stage 3: mamba_inference.py（Mamba CLI 推論，可選 LoRA）
     │
     ▼
 Stage 4: train.py（LoRA 微調 Mamba-1.4B）
     │
     ▼
 coffee_mamba_lora/（訓練後 LoRA 權重）
+    │
+    ▼
+Stage 5: main.py + static/index.html（FastAPI 聊天網頁）
 ```
 
 ---
@@ -68,7 +78,7 @@ source .venv/bin/activate
 # 若從頭建立環境
 python3 -m venv .venv
 source .venv/bin/activate
-pip install transformers datasets jinja2 ollama torch tqdm peft pytest
+pip install transformers datasets jinja2 ollama torch tqdm peft pytest fastapi uvicorn
 ```
 
 ---
@@ -170,18 +180,40 @@ dataset = load_from_disk("data/processed/tokenized_dataset")
 
 ## Stage 3：Mamba 模型推論（mamba_inference.py）
 
-載入 Hugging Face 上的 Mamba（SSM 架構）模型並執行對話測試。
+載入 Hugging Face 上的 Mamba（SSM 架構）模型，支援 LoRA 權重掛載與互動式聊天。
 
 ### 執行
 
 ```bash
 source .venv/bin/activate
+
+# 只用基礎模型
 python scripts/mamba_inference.py
+
+# 載入 LoRA 權重
+python scripts/mamba_inference.py --use_lora --lora_path ./coffee_mamba_lora
+
+# 自訂生成參數
+python scripts/mamba_inference.py --temperature 0.8 --max_tokens 300 --top_p 0.95
 ```
 
-### 切換模型
+### 命令列參數
 
-編輯 `scripts/mamba_inference.py` 中的 `MODEL_NAME`：
+| 參數 | 預設值 | 說明 |
+|---|---|---|
+| `--model_name` | `state-spaces/mamba-1.4b-hf` | 基礎模型名稱 |
+| `--use_lora` | `False` | 啟用後載入 LoRA 權重 |
+| `--lora_path` | `./coffee_mamba_lora` | LoRA 權重資料夾路徑 |
+| `--temperature` | `0.7` | 生成溫度 |
+| `--max_tokens` | `200` | 最大生成字數 |
+| `--top_p` | `0.9` | Top-p 採樣門檻 |
+| `--repetition_penalty` | `1.1` | 重複懲罰 |
+
+### 互動模式
+
+啟動後進入 `User: ` 提示迴圈，輸入 `exit` 或 `quit` 結束程式。
+
+### 切換模型
 
 | 模型名稱 | 參數量 | 說明 |
 |---|---|---|
@@ -193,10 +225,10 @@ python scripts/mamba_inference.py
 
 ### 運作機制
 
-1. 自動偵測硬體：CUDA → MPS → CPU
-2. 載入 `AutoTokenizer` + `AutoModelForCausalLM`
-3. 將模型移至對應裝置，設為 evaluation mode
-4. 執行 Wake-up Test：輸入「你好」，觀察模型回應
+1. **argparse** 解析所有命令列參數
+2. **自動偵測硬體**：CUDA → MPS → CPU
+3. **選擇性 LoRA 載入**：使用 `PeftModel.from_pretrained` 掛載權重
+4. **互動聊天**：無限迴圈，逐輪產生回應
 
 ---
 
@@ -282,6 +314,56 @@ model = PeftModel.from_pretrained(base_model, "./coffee_mamba_lora")
 
 ---
 
+## Stage 5：Web 聊天應用（main.py + index.html）
+
+前後端分離的聊天網頁，支援 LoRA 動態切換與串流打字機效果。
+
+### 啟動伺服器
+
+```bash
+source .venv/bin/activate
+python scripts/main.py
+# 瀏覽器開啟 http://localhost:8080/static/index.html
+```
+
+### 後端 API
+
+| Endpoint | 方法 | 說明 |
+|---|---|---|
+| `GET /api/lora_models` | GET | 掃描所有 checkpoint，回傳名稱、步數、Loss |
+| `/api/chat` | POST | 串流文字生成（SSE），支援 LoRA 動態切換 |
+
+### 聊天 API 請求格式
+
+```json
+{
+  "prompt": "手沖咖啡需要什麼器具？",
+  "temperature": 0.7,
+  "lora_path": "coffee_mamba_lora/checkpoint-2112"
+}
+```
+
+`lora_path` 可傳 `null` 或不傳，代表只用基礎模型。
+
+### 前端介面
+
+```
+┌──────────────────┬──────────────────────────────┐
+│ LoRA 模型選擇     │  聊天視窗                     │
+│ [下拉式選單 ▼]    │                              │
+│ 無 LoRA（基礎模型）│  User: 手沖咖啡參數？         │
+│ checkpoint-2112.. │  Assistant: 建議... (打字機)  │
+│                   │                              │
+│ 溫度控制          │  [輸入框................]     │
+│ 0.1 ───●─── 1.5   │  [送出]                      │
+└──────────────────┴──────────────────────────────┘
+```
+
+- 左側面板：LoRA 下拉選單（onload 自動打 API 載入）、溫度拉桿 0.1~1.5
+- 右側聊天：對話氣泡、`fetch` + `getReader()` 串流打字機效果、系統備註尾綴
+
+---
+
 ## 測試
 
 ### 執行整合測試
@@ -293,9 +375,10 @@ bash test.sh
 
 測試流程：
 1. **語法檢查** — 所有 Python 檔案 `py_compile`
-2. **單元測試** — pytest 20 項（參數驗證、資料集載入、模型/LoRA 包裝）
+2. **單元測試** — pytest 29 項（含 argparse 參數、API 格式）
 3. **系統測試** — 推理測試（3 組 prompt 確認模型能正常生成）
 4. **資料集完整性檢查** — 路徑存在、筆數、欄位、總 tokens
+5. **Web API 整合測試** — 5 項，使用 FastAPI TestClient 實際載入模型
 
 ### 測試清單
 
@@ -304,6 +387,8 @@ bash test.sh
 | `tests/test_config.py` | 10 項 | 參數型別、正數範圍、dropout 區間、seq_length 合理性 |
 | `tests/test_data_utils.py` | 5 項 | 資料集載入、欄位存在、input_ids 合法性、長度一致、max_length |
 | `tests/test_model_utils.py` | 5 項 | 模型載入、分詞器載入、LoRA 包裝（可訓練參數 > 0）、CUDA 偵測、中文編碼 |
+| `tests/test_mamba_inference.py` | 4 項 | argparse 預設值、自訂值、use_lora 旗標、負溫度處理 |
+| `tests/test_main.py` | 5 項 | LoRA 清單格式、基礎模型聊天、LoRA 聊天、溫度參數、錯誤路徑 |
 
 ---
 
@@ -321,13 +406,17 @@ python scripts/generate_qa.py
 # 3. 預處理為 Tokenized Dataset
 python scripts/preprocess_dataset.py
 
-# 4. （可選）載入 Mamba 模型做推論測試
+# 4. （可選）載入 Mamba 模型做 CLI 推論測試
 python scripts/mamba_inference.py
 
 # 5. 執行 LoRA 微調
 python scripts/train.py
 
-# 6. 執行全部測試
+# 6. （可選）啟動 Web 聊天應用
+python scripts/main.py
+# 瀏覽器開啟 http://localhost:8080/static/index.html
+
+# 7. 執行全部測試
 bash test.sh
 ```
 
@@ -344,4 +433,4 @@ bash test.sh
 | 總 Token 數 | 66,988 |
 | Mamba 模型 | state-spaces/mamba-1.4b-hf（1.37B 參數） |
 | LoRA 可訓練參數 | ~1.4M（佔全模型 ~0.1%） |
-| 單元測試 | 20 項全部通過 |
+| 單元測試 | 29 項（24 通過） |

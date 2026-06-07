@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mamba LoRA 聊天室</title>
+<style>
+  /* ============================================================
+     全域設定
+     ============================================================ */
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: "Segoe UI", "Noto Sans TC", system-ui, sans-serif;
+    background: #f0f2f5;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+
+  /* ============================================================
+     主容器：左右兩欄
+     ============================================================ */
+  .app-container {
+    display: flex;
+    width: 1000px;
+    height: 700px;
+    background: #fff;
+    border-radius: 16px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+    overflow: hidden;
+  }
+
+  /* ============================================================
+     左側控制面板（280px）
+     ============================================================ */
+  .sidebar {
+    width: 280px;
+    background: #f8f9fa;
+    padding: 24px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    border-right: 1px solid #e9ecef;
+  }
+
+  .sidebar h2 {
+    font-size: 16px;
+    color: #1a1a2e;
+    margin-bottom: 8px;
+  }
+
+  .sidebar label {
+    display: block;
+    font-size: 13px;
+    color: #555;
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+
+  /* 下拉選單 */
+  .sidebar select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-size: 13px;
+    background: #fff;
+    cursor: pointer;
+  }
+
+  /* 溫度拉桿區 */
+  .slider-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .slider-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .slider-header span:last-child {
+    font-size: 20px;
+    font-weight: 700;
+    color: #4361ee;
+    min-width: 36px;
+    text-align: right;
+  }
+
+  input[type="range"] {
+    width: 100%;
+    accent-color: #4361ee;
+  }
+
+  .slider-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #999;
+  }
+
+  /* ============================================================
+     右側聊天視窗（flex: 1）
+     ============================================================ */
+  .chat-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+  }
+
+  /* 聊天標題 */
+  .chat-header {
+    padding: 16px 24px;
+    border-bottom: 1px solid #e9ecef;
+    font-weight: 600;
+    color: #1a1a2e;
+  }
+
+  /* 訊息展示區 */
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  /* 對話氣泡 */
+  .bubble {
+    max-width: 80%;
+    padding: 12px 16px;
+    border-radius: 16px;
+    font-size: 14px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+
+  .bubble.user {
+    align-self: flex-end;
+    background: #4361ee;
+    color: #fff;
+    border-bottom-right-radius: 4px;
+  }
+
+  .bubble.assistant {
+    align-self: flex-start;
+    background: #f0f2f5;
+    color: #1a1a2e;
+    border-bottom-left-radius: 4px;
+  }
+
+  /* 系統備註（小字灰色） */
+  .system-note {
+    align-self: flex-start;
+    font-size: 12px;
+    color: #999;
+    margin-top: 4px;
+    white-space: pre-wrap;
+  }
+
+  /* 輸入區 */
+  .input-area {
+    padding: 16px 24px;
+    border-top: 1px solid #e9ecef;
+    display: flex;
+    gap: 12px;
+  }
+
+  .input-area input {
+    flex: 1;
+    padding: 12px 16px;
+    border: 1px solid #ddd;
+    border-radius: 24px;
+    font-size: 14px;
+    outline: none;
+    transition: border 0.2s;
+  }
+
+  .input-area input:focus {
+    border-color: #4361ee;
+  }
+
+  .input-area button {
+    padding: 12px 24px;
+    background: #4361ee;
+    color: #fff;
+    border: none;
+    border-radius: 24px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .input-area button:hover {
+    background: #3a56d4;
+  }
+
+  .input-area button:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+  }
+
+  /* 載入中提示 */
+  .loading {
+    text-align: center;
+    color: #999;
+    font-size: 13px;
+    padding: 8px 0;
+  }
+</style>
+</head>
+<body>
+
+<div class="app-container">
+
+  <!-- ============================================================
+       左側：控制面板
+       ============================================================ -->
+  <div class="sidebar">
+    <h2>⚙️ 控制面板</h2>
+
+    <!-- LoRA 模型選擇 -->
+    <div>
+      <label for="loraSelect">🧠 LoRA 模型</label>
+      <select id="loraSelect">
+        <option value="">無 LoRA（基礎模型）</option>
+        <!-- 其餘選項由 JS 動態填入 -->
+      </select>
+    </div>
+
+    <!-- 溫度拉桿 -->
+    <div class="slider-group">
+      <div class="slider-header">
+        <label for="tempSlider">🌡️ 溫度</label>
+        <span id="tempValue">0.7</span>
+      </div>
+      <input type="range" id="tempSlider" min="0.1" max="1.5" step="0.05" value="0.7">
+      <div class="slider-labels">
+        <span>精確 0.1</span>
+        <span>創意 1.5</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       右側：聊天視窗
+       ============================================================ -->
+  <div class="chat-area">
+    <div class="chat-header">💬 聊天視窗</div>
+
+    <!-- 訊息展示區 -->
+    <div class="messages" id="messages">
+      <div class="bubble assistant">
+        嗨！我是 Mamba 咖啡助手 ☕ 有什麼關於咖啡的問題想問我嗎？
+      </div>
+    </div>
+
+    <!-- 輸入區 -->
+    <div class="input-area">
+      <input
+        type="text"
+        id="userInput"
+        placeholder="輸入你的問題⋯⋯"
+        autofocus
+      >
+      <button id="sendBtn">送出</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ============================================================
+// 頁面載入時：取得 LoRA 選項
+// ============================================================
+async function loadLoraModels() {
+  try {
+    const res = await fetch("/api/lora_models");
+    const data = await res.json();
+    const select = document.getElementById("loraSelect");
+
+    // 保留第一個「無 LoRA」選項，後面插入掃描到的 checkpoint
+    data.models.forEach((m) => {
+      const opt = document.createElement("option");
+      // 顯示文字：checkpoint-2112 (Step: 2112, Loss: 8.14)
+      opt.textContent = `${m.name} (Step: ${m.step}, Loss: ${m.loss})`;
+      opt.value = m.path;   // value 存路徑，送出時用
+      select.appendChild(opt);
+    });
+  } catch (err) {
+    console.error("載入 LoRA 清單失敗：", err);
+  }
+}
+loadLoraModels();
+
+// ============================================================
+// 溫度拉桿：即時更新數值
+// ============================================================
+const tempSlider = document.getElementById("tempSlider");
+const tempValue  = document.getElementById("tempValue");
+
+tempSlider.addEventListener("input", () => {
+  tempValue.textContent = parseFloat(tempSlider.value).toFixed(2);
+});
+
+// ============================================================
+// 送出按鈕與 Enter 鍵事件
+// ============================================================
+const userInput = document.getElementById("userInput");
+const sendBtn   = document.getElementById("sendBtn");
+const messages  = document.getElementById("messages");
+
+async function sendMessage() {
+  const prompt = userInput.value.trim();
+  if (!prompt) return;
+
+  // ---------- 1. 在畫面上顯示使用者的訊息 ----------
+  appendBubble(prompt, "user");
+  userInput.value = "";
+  sendBtn.disabled = true;
+
+  // ---------- 2. 建立 assistant 的空白氣泡（預備打字機效果） ----------
+  const assistantBubble = document.createElement("div");
+  assistantBubble.className = "bubble assistant";
+  messages.appendChild(assistantBubble);
+  scrollToBottom();
+
+  // ---------- 3. 呼叫 API ----------
+  const loraSelect = document.getElementById("loraSelect");
+  const loraPath = loraSelect.value;       // 空字串代表無 LoRA
+  const temperature = parseFloat(tempSlider.value);
+
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: prompt,
+        temperature: temperature,
+        lora_path: loraPath || null,       // 空字串轉為 null
+      }),
+    });
+
+    if (!res.ok) {
+      // 伺服器回傳錯誤
+      const errText = await res.text();
+      assistantBubble.textContent = `❌ 錯誤：${errText}`;
+      sendBtn.disabled = false;
+      return;
+    }
+
+    // ---------- 4. 讀取串流（打字機效果） ----------
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      assistantBubble.textContent = buffer;
+      scrollToBottom();
+    }
+
+    // ---------- 5. 處理系統備註（最後一行以 > 開頭） ----------
+    // 系統備註已經包含在 buffer 中，但我們可以把它從氣泡中分離
+    // 找最後一個 > 符號開頭的行
+    const lines = buffer.split("\n");
+    let mainText = buffer;
+    let noteText = "";
+
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i].startsWith(">")) {
+        mainText = lines.slice(0, i).join("\n");
+        noteText = lines.slice(i).join("\n");
+        break;
+      }
+    }
+
+    // 更新氣泡內容（去掉系統備註）
+    assistantBubble.textContent = mainText.trim();
+
+    // 如果找到系統備註，在氣泡下方用小字顯示
+    if (noteText) {
+      const noteDiv = document.createElement("div");
+      noteDiv.className = "system-note";
+      noteDiv.textContent = noteText;
+      // 插在 assistantBubble 後面
+      assistantBubble.parentNode.insertBefore(noteDiv, assistantBubble.nextSibling);
+    }
+
+  } catch (err) {
+    assistantBubble.textContent = `❌ 連線錯誤：${err.message}`;
+  }
+
+  sendBtn.disabled = false;
+  scrollToBottom();
+}
+
+// ============================================================
+// 輔助函式
+// ============================================================
+
+// 新增對話氣泡
+function appendBubble(text, role) {
+  const bubble = document.createElement("div");
+  bubble.className = `bubble ${role}`;
+  bubble.textContent = text;
+  messages.appendChild(bubble);
+  scrollToBottom();
+}
+
+// 自動捲到底部
+function scrollToBottom() {
+  messages.scrollTop = messages.scrollHeight;
+}
+
+// 綁定事件
+sendBtn.addEventListener("click", sendMessage);
+userInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+</script>
+
+</body>
+</html>

@@ -17,10 +17,14 @@ python3 -m py_compile scripts/model_utils.py
 python3 -m py_compile scripts/data_utils.py
 python3 -m py_compile scripts/train.py
 python3 -m py_compile scripts/inference_test.py
+python3 -m py_compile scripts/mamba_inference.py
+python3 -m py_compile scripts/main.py
 python3 -m py_compile tests/__init__.py
 python3 -m py_compile tests/test_config.py
 python3 -m py_compile tests/test_data_utils.py
 python3 -m py_compile tests/test_model_utils.py
+python3 -m py_compile tests/test_mamba_inference.py
+python3 -m py_compile tests/test_main.py
 echo "  ✅ 語法檢查通過"
 echo ""
 
