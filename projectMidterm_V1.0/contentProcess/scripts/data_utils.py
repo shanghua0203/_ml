@@ -30,6 +30,7 @@ def load_dataset(tokenizer):
             texts, truncation=True, max_length=MAX_SEQ_LENGTH, padding=False
         )
         tokenized["labels"] = tokenized["input_ids"].copy()
+        tokenized["length"] = [len(ids) for ids in tokenized["input_ids"]]
         return tokenized
 
     dataset = raw.map(tokenize_fn, batched=True, batch_size=100, remove_columns=raw.column_names)

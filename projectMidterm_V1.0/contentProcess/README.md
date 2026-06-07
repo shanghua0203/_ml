@@ -21,7 +21,8 @@ contentProcess/
 │   ├── generate_qa.py                  # Stage 1：文本 → 問答對
 │   ├── preprocess_dataset.py           # Stage 2：問答對 → Tokenized Dataset
 │   ├── mamba_inference.py              # Stage 3：Mamba 推論（CLI + LoRA + 互動模式）
-│   └── main.py                         # Stage 5：FastAPI 聊天網頁後端
+│   ├── main.py                         # Stage 5：FastAPI 聊天網頁後端
+│   └── analyze_training_logs.py        # 訓練日誌分析與繪圖
 ├── static/
 │   └── index.html                      # Stage 5：前端聊天頁面
 ├── tests/
@@ -78,7 +79,7 @@ source .venv/bin/activate
 # 若從頭建立環境
 python3 -m venv .venv
 source .venv/bin/activate
-pip install transformers datasets jinja2 ollama torch tqdm peft pytest fastapi uvicorn
+pip install transformers datasets jinja2 ollama torch tqdm peft pytest fastapi uvicorn matplotlib seaborn
 ```
 
 ---
@@ -364,6 +365,41 @@ python scripts/main.py
 
 ---
 
+## Stage 6：訓練日誌分析（analyze_training_logs.py）
+
+讀取微調過程產生的 `training_log.jsonl`，繪製四維度學術圖表並輸出統計摘要。
+
+### 執行
+
+```bash
+source .venv/bin/activate
+python scripts/analyze_training_logs.py
+```
+
+### 產出圖表
+
+輸出至 `data/processed/training_analysis.png`（2×2 子圖）：
+
+| 圖表 | 說明 |
+|------|------|
+| 訓練損失曲線 (Loss) | 原始 Loss + 滾動平均平滑曲線 |
+| 困惑度曲線 (PPL) | `PPL = exp(loss)`，Y 軸 log scale |
+| 學習率變化 (LR) | 線性衰減模擬，`1e-4 → 0`，共 3840 步 |
+| 訓練速度 (Speed) | 每 10 步耗時散佈圖 + 平均線 |
+
+### 統計摘要
+
+執行完畢後終端機會印出 Markdown 表格，包含：
+
+| 指標 | 數值範例 |
+|------|---------|
+| 初始 / 最終 Loss | 8.6908 → 0.3270 |
+| 最終 Perplexity | 1.3867 |
+| 平均每步耗時 | 0.0437 秒 |
+| 預估總訓練時間 | 28 分鐘 |
+
+---
+
 ## 測試
 
 ### 執行整合測試
@@ -412,11 +448,14 @@ python scripts/mamba_inference.py
 # 5. 執行 LoRA 微調
 python scripts/train.py
 
-# 6. （可選）啟動 Web 聊天應用
+# 6. （可選）分析訓練日誌並繪製圖表
+python scripts/analyze_training_logs.py
+
+# 7. （可選）啟動 Web 聊天應用
 python scripts/main.py
 # 瀏覽器開啟 http://localhost:8080/static/index.html
 
-# 7. 執行全部測試
+# 8. 執行全部測試
 bash test.sh
 ```
 
@@ -433,4 +472,4 @@ bash test.sh
 | 總 Token 數 | 66,988 |
 | Mamba 模型 | state-spaces/mamba-1.4b-hf（1.37B 參數） |
 | LoRA 可訓練參數 | ~1.4M（佔全模型 ~0.1%） |
-| 單元測試 | 29 項（24 通過） |
+| 單元測試 | 29 項（全部通過） |
