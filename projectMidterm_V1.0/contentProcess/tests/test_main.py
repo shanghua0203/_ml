@@ -105,3 +105,56 @@ def test_chat_invalid_lora_path():
     )
     assert res.status_code == 400
     assert "找不到 LoRA 路徑" in res.text
+
+
+def test_lora_toggle_off_after_use():
+    """用過 LoRA 之後切回「無 LoRA」，系統備註應顯示基礎模型（先前 bug：LoRA 會殘留）"""
+    res = client.post(
+        "/api/chat",
+        json={"prompt": "test", "temperature": 0.7},
+    )
+    assert res.status_code == 200
+    assert "基礎模型（無 LoRA）" in res.text
+
+
+def test_lora_switch_checkpoints():
+    """切換到不同的 LoRA checkpoint，系統備註應顯示新的 checkpoint 名稱"""
+    models_res = client.get("/api/lora_models")
+    models = models_res.json().get("models", [])
+    if len(models) < 2:
+        return  # 需要至少兩個 checkpoint 才測
+
+    res = client.post(
+        "/api/chat",
+        json={
+            "prompt": "test",
+            "lora_path": models[1]["path"],
+        },
+    )
+    assert res.status_code == 200
+    assert models[1]["name"] in res.text
+
+
+def test_lora_cycle_off_on_off():
+    """無 LoRA → 有 LoRA → 無 LoRA 循環，每次系統備註應正確"""
+    models_res = client.get("/api/lora_models")
+    models = models_res.json().get("models", [])
+
+    # 第一步：無 LoRA
+    res = client.post("/api/chat", json={"prompt": "test"})
+    assert res.status_code == 200
+    assert "基礎模型（無 LoRA）" in res.text
+
+    if models:
+        # 第二步：有 LoRA
+        res = client.post("/api/chat", json={
+            "prompt": "test",
+            "lora_path": models[0]["path"],
+        })
+        assert res.status_code == 200
+        assert models[0]["name"] in res.text
+
+    # 第三步：回到無 LoRA
+    res = client.post("/api/chat", json={"prompt": "test"})
+    assert res.status_code == 200
+    assert "基礎模型（無 LoRA）" in res.text

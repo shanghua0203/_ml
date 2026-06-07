@@ -22,6 +22,7 @@ import torch
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from peft import PeftModel
 from pydantic import BaseModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 
@@ -36,6 +37,7 @@ LORA_BASE_DIR = os.path.join(BASE_DIR, "coffee_mamba_lora")
 # 全域變數 — 伺服器啟動時載入，常駐記憶體
 # ============================================================
 model = None      # 基礎 Mamba 模型，之後會依需求掛載 LoRA
+base_model = None # 純基礎模型參照（永不掛 LoRA，確保無權重汙染）
 tokenizer = None  # 分詞器
 device = None     # 自動偵測到的裝置（cuda / mps / cpu）
 
@@ -98,7 +100,7 @@ def load_models():
     2. 載入 Mamba 基礎模型到記憶體（常駐，不重複載入）
     3. 載入分詞器
     """
-    global model, tokenizer, device
+    global model, base_model, tokenizer, device
 
     device = auto_device()
 
@@ -115,6 +117,7 @@ def load_models():
     model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
     model.to(device)
     model.eval()
+    base_model = model
     print(f"[INFO] 模型成功載入，參數量：{sum(p.numel() for p in model.parameters()):,}")
 
 
@@ -201,7 +204,7 @@ async def chat_stream(req: ChatRequest):
     4. 逐 token yield 給前端（打字機效果）
     5. 最後 yield 系統備註
     """
-    global model, tokenizer, device
+    global model, base_model, tokenizer, device
 
     # --- 步驟 1：選擇性載入 LoRA 權重 ---
     if req.lora_path:
@@ -210,20 +213,22 @@ async def chat_stream(req: ChatRequest):
             raise HTTPException(status_code=400, detail=f"找不到 LoRA 路徑：{req.lora_path}")
 
         try:
-            from peft import PeftModel
-
-            # PeftModel.from_pretrained 會把 LoRA 權重疊到基礎模型上
-            # 注意：第一次呼叫會注入 LoRA 層，後續相同設定的呼叫只更換權重
-            active_model = PeftModel.from_pretrained(model, lora_full_path)
-            active_model.to(device)
-            active_model.eval()
+            if not isinstance(model, PeftModel):
+                # 第一次使用 LoRA：從純基礎模型建立 PeftModel
+                model = PeftModel.from_pretrained(base_model, lora_full_path)
+                model.to(device)
+                model.eval()
+            else:
+                # 後續切換：覆蓋同一 adapter slot 的權重 + 明確切換
+                model.load_adapter(lora_full_path, adapter_name="default")
+                model.set_adapter("default")
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"載入 LoRA 失敗：{str(e)}")
 
-        # 從路徑取出資料夾名稱作為顯示名稱（例：checkpoint-2112）
+        active_model = model
         lora_folder_name = os.path.basename(lora_full_path)
     else:
-        active_model = model
+        active_model = base_model
         lora_folder_name = "基礎模型（無 LoRA）"
 
     # --- 步驟 2：準備輸入 ---
