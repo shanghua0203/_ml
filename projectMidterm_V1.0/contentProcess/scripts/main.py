@@ -322,8 +322,27 @@ if os.path.isdir(static_dir):
 # 啟動點
 # ============================================================
 if __name__ == "__main__":
+    import socket
     import sys
     # 將專案根目錄加入 sys.path，使 uvicorn 能找到 scripts.main
     sys.path.insert(0, BASE_DIR)
     import uvicorn
-    uvicorn.run("scripts.main:app", host="0.0.0.0", port=8080, reload=False)
+
+    # 自動尋找可用埠（若預設 8080 被佔用則遞增嘗試）
+    port = 8080
+    max_attempts = 10
+    for attempt in range(max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("0.0.0.0", port))
+                break
+            except OSError:
+                if attempt < max_attempts - 1:
+                    print(f"[WARN] 埠 {port} 已被佔用，嘗試 {port + 1}...")
+                    port += 1
+                else:
+                    print(f"[ERROR] 埠 {port} ~ {port + max_attempts - 1} 皆被佔用，無法啟動")
+                    sys.exit(1)
+
+    print(f"[INFO] 伺服器啟動於 http://0.0.0.0:{port}")
+    uvicorn.run("scripts.main:app", host="0.0.0.0", port=port, reload=False)
