@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zhqa-generator"
+version = "0.1.0"
+description = "將中文純文字切割並透過 Ollama LLM 自動生成 QA 問答對，供 LLM 微調使用"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+keywords = ["nlp", "chinese", "qa", "llm", "ollama", "fine-tuning", "dataset"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Linguistic",
+    "Natural Language :: Chinese (Traditional)",
+]
+dependencies = [
+    "ollama>=0.1.0",
+    "tqdm>=4.0.0",
+]
+
+[project.scripts]
+zhqa-generate = "zhqa_generator.core:main"
+
+[project.urls]
+Homepage = "https://github.com/shanghua0203/zhqa-generator"
+"Bug Tracker" = "https://github.com/shanghua0203/zhqa-generator/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/zhqa_generator"]

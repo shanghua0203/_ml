@@ -13,6 +13,7 @@ Mamba 模型聊天網頁 — FastAPI 後端伺服器
   uvicorn scripts.main:app --host 0.0.0.0 --port 8080 --reload
 """
 
+import gc
 import json
 import os
 import threading
@@ -36,10 +37,11 @@ LORA_BASE_DIR = os.path.join(BASE_DIR, "coffee_mamba_lora")
 # ============================================================
 # 全域變數 — 伺服器啟動時載入，常駐記憶體
 # ============================================================
-model = None      # 基礎 Mamba 模型，之後會依需求掛載 LoRA
-base_model = None # 純基礎模型參照（永不掛 LoRA，確保無權重汙染）
-tokenizer = None  # 分詞器
-device = None     # 自動偵測到的裝置（cuda / mps / cpu）
+model = None           # 當前載入中的模型（純基礎 or LoRA 包裹）
+tokenizer = None       # 分詞器
+device = None          # 自動偵測到的裝置（cuda / mps / cpu）
+current_lora_path = None  # 當前使用的 LoRA 完整路徑，None=純基礎模型
+model_lock = threading.Lock()  # 模型重新載入的執行緒鎖
 
 # ============================================================
 # 建立 FastAPI 實體
@@ -100,7 +102,7 @@ def load_models():
     2. 載入 Mamba 基礎模型到記憶體（常駐，不重複載入）
     3. 載入分詞器
     """
-    global model, base_model, tokenizer, device
+    global model, tokenizer, device, current_lora_path
 
     device = auto_device()
 
@@ -117,7 +119,7 @@ def load_models():
     model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
     model.to(device)
     model.eval()
-    base_model = model
+    current_lora_path = None  # 啟動時為純基礎模型
     print(f"[INFO] 模型成功載入，參數量：{sum(p.numel() for p in model.parameters()):,}")
 
 
@@ -198,38 +200,63 @@ async def chat_stream(req: ChatRequest):
     接收使用者的提問，用 Mamba 模型生成回答，並用串流方式逐字回傳。
 
     處理流程：
-    1. 若有指定 lora_path，用 PeftModel.from_pretrained 動態載入 LoRA 權重
+    1. 若 req.lora_path 與 current_lora_path 不同，完整卸載模型並重新載入
+       （確保絕對無權重污染）
     2. 將 prompt 轉為 tensor
     3. 用 TextIteratorStreamer 搭配 Thread 非同步產生文字
     4. 逐 token yield 給前端（打字機效果）
     5. 最後 yield 系統備註
     """
-    global model, base_model, tokenizer, device
+    global model, tokenizer, device, current_lora_path
 
-    # --- 步驟 1：選擇性載入 LoRA 權重 ---
-    if req.lora_path:
-        lora_full_path = os.path.join(BASE_DIR, req.lora_path)
-        if not os.path.isdir(lora_full_path):
-            raise HTTPException(status_code=400, detail=f"找不到 LoRA 路徑：{req.lora_path}")
+    # --- 步驟 1：比對 LoRA 狀態，必要時完整卸載並重新載入 ---
+    req_lora_full = os.path.join(BASE_DIR, req.lora_path) if req.lora_path else None
 
-        try:
-            if not isinstance(model, PeftModel):
-                # 第一次使用 LoRA：從純基礎模型建立 PeftModel
-                model = PeftModel.from_pretrained(base_model, lora_full_path)
+    # 先驗證路徑有效，避免刪掉模型後才發現路徑不存在
+    if req_lora_full and not os.path.isdir(req_lora_full):
+        raise HTTPException(status_code=400, detail=f"找不到 LoRA 路徑：{req.lora_path}")
+
+    if req_lora_full != current_lora_path:
+        with model_lock:
+            # 雙重檢查：lock 期間可能已被其他 thread 更新
+            if req_lora_full != current_lora_path:
+                # 1. 安全釋放舊模型記憶體
+                del model
+                gc.collect()
+                if device == "cuda":
+                    torch.cuda.empty_cache()
+                elif device == "mps":
+                    torch.mps.empty_cache()
+
+                # 2. 重新載入純基礎模型
+                MODEL_NAME = "state-spaces/mamba-1.4b-hf"
+                print(f"[INFO] 重新載入基礎模型：{MODEL_NAME}")
+                model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
                 model.to(device)
                 model.eval()
-            else:
-                # 後續切換：覆蓋同一 adapter slot 的權重 + 明確切換
-                model.load_adapter(lora_full_path, adapter_name="default")
-                model.set_adapter("default")
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"載入 LoRA 失敗：{str(e)}")
 
-        active_model = model
-        lora_folder_name = os.path.basename(lora_full_path)
-    else:
-        active_model = base_model
-        lora_folder_name = "基礎模型（無 LoRA）"
+                # 3. 若請求指定 LoRA，掛載上去
+                if req_lora_full:
+                    print(f"[INFO] 掛載 LoRA：{req.lora_path}")
+                    try:
+                        model = PeftModel.from_pretrained(model, req_lora_full)
+                        model.to(device)
+                        model.eval()
+                    except Exception as e:
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"載入 LoRA 失敗：{str(e)}",
+                        )
+
+                current_lora_path = req_lora_full
+                print(f"[INFO] 模型切換完成：{'基礎模型' if not req_lora_full else req.lora_path}")
+
+    active_model = model
+    lora_folder_name = (
+        "基礎模型（無 LoRA）"
+        if not req_lora_full
+        else os.path.basename(req_lora_full)
+    )
 
     # --- 步驟 2：準備輸入 ---
     inputs = tokenizer(req.prompt, return_tensors="pt").to(device)
@@ -295,8 +322,27 @@ if os.path.isdir(static_dir):
 # 啟動點
 # ============================================================
 if __name__ == "__main__":
+    import socket
     import sys
     # 將專案根目錄加入 sys.path，使 uvicorn 能找到 scripts.main
     sys.path.insert(0, BASE_DIR)
     import uvicorn
-    uvicorn.run("scripts.main:app", host="0.0.0.0", port=8080, reload=False)
+
+    # 自動尋找可用埠（若預設 8080 被佔用則遞增嘗試）
+    port = 8080
+    max_attempts = 10
+    for attempt in range(max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("0.0.0.0", port))
+                break
+            except OSError:
+                if attempt < max_attempts - 1:
+                    print(f"[WARN] 埠 {port} 已被佔用，嘗試 {port + 1}...")
+                    port += 1
+                else:
+                    print(f"[ERROR] 埠 {port} ~ {port + max_attempts - 1} 皆被佔用，無法啟動")
+                    sys.exit(1)
+
+    print(f"[INFO] 伺服器啟動於 http://0.0.0.0:{port}")
+    uvicorn.run("scripts.main:app", host="0.0.0.0", port=port, reload=False)
